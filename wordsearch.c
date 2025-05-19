@@ -7,14 +7,11 @@
 #include <unistd.h>
 #include <ctype.h>
 
-#define BUFSIZE_PATH 4096
-#define BUFSIZE_LINE 2048
-
 // Проверяем, является ли файл текстовым по расширению
 int ext_is_text(const char *fname) {
     const char *dot = strrchr(fname, '.');
     if (!dot) return 0;
-    const char *text_exts[] = {"txt", "c", "h", "md", "cpp", "hpp", "py", "java", "sh", "csv", "log", NULL};
+    const char *text_exts[] = {"txt", "c", "h", "md", NULL};
     for (int i = 0; text_exts[i]; i++) {
         if (strcasecmp(dot + 1, text_exts[i]) == 0) {
             return 1;
@@ -58,7 +55,7 @@ int search_file(const char *filepath, const char *pattern) {
         perror("Не удалось открыть файл");
         return 0;
     }
-    char buffer[BUFSIZE_LINE];
+    char buffer[2048];
     int linenum = 0, found = 0;
     while (fgets(buffer, sizeof(buffer), fp)) {
         linenum++;
@@ -85,7 +82,7 @@ int scan_folder(const char *folderpath, const char *pattern) {
     int any_found = 0;
     while ((de = readdir(dp)) != NULL) {
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
-        char newpath[BUFSIZE_PATH];
+        char newpath[4096];
         snprintf(newpath, sizeof(newpath), "%s/%s", folderpath, de->d_name);
 
         struct stat s;
@@ -108,7 +105,7 @@ void expand_home(char *p) {
     if (p[0] == '~') {
         const char *home = getenv("HOME");
         if (home) {
-            char temp[BUFSIZE_PATH];
+            char temp[4096];
             snprintf(temp, sizeof(temp), "%s%s", home, p + 1);
             strcpy(p, temp);
         }
@@ -121,7 +118,7 @@ int main(int argc, char *argv[]) {
         printf("Пример: %s ~/files \"ваша фраза\"\n", argv[0]);
         return 1;
     }
-    char dir[BUFSIZE_PATH];
+    char dir[4096];
     strncpy(dir, argv[1], sizeof(dir));
     dir[sizeof(dir) - 1] = '\0';
     expand_home(dir);
