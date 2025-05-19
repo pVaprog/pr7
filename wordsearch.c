@@ -1,129 +1,116 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <wordexp.h>
-#include <strings.h>
 
-#define MAX_PATH 4096
-#define MAX_LINE 2048
+#define BUFSIZE_PATH 4096
+#define BUFSIZE_LINE 2048
 
-// Проверка текстового файла по расширению
-int is_text_file(const char *filename) {
-    const char *ext = strrchr(filename, '.');
-    if (!ext) return 0;
-    
+// Проверяем, является ли файл текстовым по расширению
+int ext_is_text(const char *fname) {
+    const char *dot = strrchr(fname, '.');
+    if (!dot) return 0;
     const char *text_exts[] = {"txt", "c", "h", "md", "cpp", "hpp", "py", "java", "sh", "csv", "log", NULL};
-    
     for (int i = 0; text_exts[i]; i++) {
-        if (strcasecmp(ext + 1, text_exts[i]) == 0) {
+        if (strcasecmp(dot + 1, text_exts[i]) == 0) {
             return 1;
         }
     }
     return 0;
 }
 
-// Проверка на границы слова
-int is_word_boundary(char c) {
-    return !isalnum(c) && c != '_';
+// Проверяем, допустим ли символ перед/после слова (для строгой границы)
+int is_word_separator(char c) {
+    // Пробел, табуляция, конец строки, начало строки, перевод строки, знаки препинания
+    return c == '\0' || c == '\n' || c == '\r' || isspace((unsigned char)c) ||
+           c == '.' || c == ',' || c == ';' || c == ':' || c == '!' || c == '?' || c == '(' || c == ')' || c == '[' || c == ']' || c == '"' || c == '\'';
 }
 
-// Поиск точного совпадения слова или фразы
-int find_exact_match(const char *line, const char *phrase) {
-    const char *match = line;
-    size_t phrase_len = strlen(phrase);
-    
-    while ((match = strstr(match, phrase)) != NULL) {
-        size_t pos = match - line;
-        
-        // Проверяем границы перед фразой
-        int before_ok = (pos == 0) || is_word_boundary(line[pos - 1]);
-        
-        // Проверяем границы после фразы
-        int after_ok = (pos + phrase_len == strlen(line)) || 
-                      is_word_boundary(line[pos + phrase_len]);
-        
-        if (before_ok && after_ok) {
-            return 1; // Нашли точное совпадение
+// Строгий поиск слова/фразы по правилам
+int strict_phrase_match(const char *line, const char *pattern) {
+    size_t linelen = strlen(line);
+    size_t patlen = strlen(pattern);
+
+    if (patlen == 0) return 0;
+    const char *p = line;
+    while ((p = strstr(p, pattern)) != NULL) {
+        // Символ до фразы (или начало строки)
+        char before = (p == line) ? ' ' : *(p - 1);
+        // Символ после фразы (или конец строки)
+        char after = ((p + patlen) >= (line + linelen)) ? '\0' : *(p + patlen);
+
+        if (is_word_separator(before) && is_word_separator(after)) {
+            return 1;
         }
-        
-        match++; // Продолжаем поиск
+        p += patlen;
     }
-    
-    return 0; // Точное совпадение не найдено
+    return 0;
 }
 
-// Поиск фразы в файле
-void search_in_file(const char *path, const char *phrase) {
-    FILE *file = fopen(path, "r");
-    if (!file) {
-        perror("Ошибка открытия файла");
-        return;
+// Поиск по одному файлу, возвращает 1 если что-то найдено
+int search_file(const char *filepath, const char *pattern) {
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) {
+        perror("Не удалось открыть файл");
+        return 0;
     }
-
-    char line[MAX_LINE];
-    int line_num = 0;
-    
-    while (fgets(line, sizeof(line), file)) {
-        line_num++;
-        size_t line_len = strlen(line);
-        
-        // Удаляем символ новой строки для вывода
-        if (line_len > 0 && line[line_len-1] == '\n') {
-            line[line_len-1] = '\0';
-            line_len--;
-        }
-        
-        if (find_exact_match(line, phrase)) {
-            printf("%s:%d: %s\n", path, line_num, line);
+    char buffer[BUFSIZE_LINE];
+    int linenum = 0, found = 0;
+    while (fgets(buffer, sizeof(buffer), fp)) {
+        linenum++;
+        // Удаляем символ новой строки
+        size_t l = strlen(buffer);
+        if (l > 0 && buffer[l-1] == '\n') buffer[l-1] = '\0';
+        if (strict_phrase_match(buffer, pattern)) {
+            printf("%s:%d: %s\n", filepath, linenum, buffer);
+            found = 1;
         }
     }
-    
-    fclose(file);
+    fclose(fp);
+    return found;
 }
 
-// Рекурсивный поиск в директории
-void search_in_dir(const char *path, const char *phrase) {
-    DIR *dir = opendir(path);
-    if (!dir) {
-        perror("Ошибка открытия директории");
-        return;
+// Рекурсивный обход папки, возвращает 1 если найдено
+int scan_folder(const char *folderpath, const char *pattern) {
+    DIR *dp = opendir(folderpath);
+    if (!dp) {
+        perror("Не удалось открыть директорию");
+        return 0;
     }
+    struct dirent *de;
+    int any_found = 0;
+    while ((de = readdir(dp)) != NULL) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char newpath[BUFSIZE_PATH];
+        snprintf(newpath, sizeof(newpath), "%s/%s", folderpath, de->d_name);
 
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-
-        char full_path[MAX_PATH];
-        snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
-
-        struct stat statbuf;
-        if (stat(full_path, &statbuf) == -1) {
-            perror("Ошибка получения информации о файле");
+        struct stat s;
+        if (stat(newpath, &s) == -1) {
+            perror("stat");
             continue;
         }
-
-        if (S_ISDIR(statbuf.st_mode)) {
-            search_in_dir(full_path, phrase);
-        } else if (is_text_file(entry->d_name)) {
-            search_in_file(full_path, phrase);
+        if (S_ISDIR(s.st_mode)) {
+            if (scan_folder(newpath, pattern)) any_found = 1;
+        } else if (ext_is_text(de->d_name)) {
+            if (search_file(newpath, pattern)) any_found = 1;
         }
     }
-
-    closedir(dir);
+    closedir(dp);
+    return any_found;
 }
 
-// Обработка пути с ~
-void expand_path(char *path) {
-    if (path[0] == '~') {
-        char *home = getenv("HOME");
+// Поддержка ~ в пути
+void expand_home(char *p) {
+    if (p[0] == '~') {
+        const char *home = getenv("HOME");
         if (home) {
-            char temp[MAX_PATH];
-            snprintf(temp, sizeof(temp), "%s%s", home, path + 1);
-            strcpy(path, temp);
+            char temp[BUFSIZE_PATH];
+            snprintf(temp, sizeof(temp), "%s%s", home, p + 1);
+            strcpy(p, temp);
         }
     }
 }
@@ -131,22 +118,24 @@ void expand_path(char *path) {
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         printf("Использование: %s <директория> <слово или фраза>\n", argv[0]);
-        printf("Пример: %s ~/files \"точная фраза\"\n", argv[0]);
+        printf("Пример: %s ~/files \"ваша фраза\"\n", argv[0]);
+        return 1;
+    }
+    char dir[BUFSIZE_PATH];
+    strncpy(dir, argv[1], sizeof(dir));
+    dir[sizeof(dir) - 1] = '\0';
+    expand_home(dir);
+
+    struct stat st;
+    if (stat(dir, &st) == -1 || !S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "Ошибка: директория '%s' недоступна\n", dir);
         return 1;
     }
 
-    char dir_path[MAX_PATH];
-    strncpy(dir_path, argv[1], sizeof(dir_path));
-    expand_path(dir_path);
-
-    struct stat statbuf;
-    if (stat(dir_path, &statbuf) == -1 || !S_ISDIR(statbuf.st_mode)) {
-        fprintf(stderr, "Ошибка: директория '%s' недоступна\n", dir_path);
-        return 1;
+    printf("Поиск \"%s\" в %s...\n", argv[2], dir);
+    int result = scan_folder(dir, argv[2]);
+    if (!result) {
+        printf("Совпадений для \"%s\" не найдено в %s\n", argv[2], dir);
     }
-
-    printf("Поиск фразы '%s' в %s...\n", argv[2], dir_path);
-    search_in_dir(dir_path, argv[2]);
-    
     return 0;
 }
