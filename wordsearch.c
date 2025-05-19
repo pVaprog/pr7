@@ -9,6 +9,7 @@
 #include <strings.h>
 
 #define MAX_PATH 4096
+#define MAX_LINE 2048
 
 // Проверка текстового файла по расширению
 int is_text_file(const char *filename) {
@@ -25,48 +26,59 @@ int is_text_file(const char *filename) {
     return 0;
 }
 
-// Улучшенная проверка целого слова
-int is_whole_word(const char *line, const char *word, size_t pos, size_t line_len) {
-    // Проверяем символ перед словом
-    if (pos > 0 && (isalnum(line[pos - 1]) || line[pos - 1] == '_')) {
-        return 0;
-    }
-    
-    // Проверяем символ после слова
-    size_t word_len = strlen(word);
-    size_t after_pos = pos + word_len;
-    if (after_pos < line_len && (isalnum(line[after_pos]) || line[after_pos] == '_')) {
-        return 0;
-    }
-    
-    return 1;
+// Проверка на границы слова
+int is_word_boundary(char c) {
+    return !isalnum(c) && c != '_';
 }
 
-// Поиск слова в файле
-void search_in_file(const char *path, const char *word) {
+// Поиск точного совпадения слова или фразы
+int find_exact_match(const char *line, const char *phrase) {
+    const char *match = line;
+    size_t phrase_len = strlen(phrase);
+    
+    while ((match = strstr(match, phrase)) != NULL) {
+        size_t pos = match - line;
+        
+        // Проверяем границы перед фразой
+        int before_ok = (pos == 0) || is_word_boundary(line[pos - 1]);
+        
+        // Проверяем границы после фразы
+        int after_ok = (pos + phrase_len == strlen(line)) || 
+                      is_word_boundary(line[pos + phrase_len]);
+        
+        if (before_ok && after_ok) {
+            return 1; // Нашли точное совпадение
+        }
+        
+        match++; // Продолжаем поиск
+    }
+    
+    return 0; // Точное совпадение не найдено
+}
+
+// Поиск фразы в файле
+void search_in_file(const char *path, const char *phrase) {
     FILE *file = fopen(path, "r");
     if (!file) {
         perror("Ошибка открытия файла");
         return;
     }
 
-    char line[MAX_PATH];
+    char line[MAX_LINE];
     int line_num = 0;
     
     while (fgets(line, sizeof(line), file)) {
         line_num++;
         size_t line_len = strlen(line);
-        const char *match = line;
         
-        while ((match = strstr(match, word)) != NULL) {
-            size_t pos = match - line;
-            if (is_whole_word(line, word, pos, line_len)) {
-                char *newline = strchr(line, '\n');
-                if (newline) *newline = '\0';
-                printf("%s:%d: %s\n", path, line_num, line);
-                break;
-            }
-            match++;
+        // Удаляем символ новой строки для вывода
+        if (line_len > 0 && line[line_len-1] == '\n') {
+            line[line_len-1] = '\0';
+            line_len--;
+        }
+        
+        if (find_exact_match(line, phrase)) {
+            printf("%s:%d: %s\n", path, line_num, line);
         }
     }
     
@@ -74,7 +86,7 @@ void search_in_file(const char *path, const char *word) {
 }
 
 // Рекурсивный поиск в директории
-void search_in_dir(const char *path, const char *word) {
+void search_in_dir(const char *path, const char *phrase) {
     DIR *dir = opendir(path);
     if (!dir) {
         perror("Ошибка открытия директории");
@@ -95,9 +107,9 @@ void search_in_dir(const char *path, const char *word) {
         }
 
         if (S_ISDIR(statbuf.st_mode)) {
-            search_in_dir(full_path, word);
+            search_in_dir(full_path, phrase);
         } else if (is_text_file(entry->d_name)) {
-            search_in_file(full_path, word);
+            search_in_file(full_path, phrase);
         }
     }
 
@@ -118,8 +130,8 @@ void expand_path(char *path) {
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        printf("Использование: %s <директория> <слово>\n", argv[0]);
-        printf("Пример: %s ~/files слово\n", argv[0]);
+        printf("Использование: %s <директория> <слово или фраза>\n", argv[0]);
+        printf("Пример: %s ~/files \"точная фраза\"\n", argv[0]);
         return 1;
     }
 
@@ -133,7 +145,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("Поиск слова '%s' в %s...\n", argv[2], dir_path);
+    printf("Поиск фразы '%s' в %s...\n", argv[2], dir_path);
     search_in_dir(dir_path, argv[2]);
     
     return 0;
